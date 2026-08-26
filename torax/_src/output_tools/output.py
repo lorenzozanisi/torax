@@ -413,6 +413,9 @@ class StateHistory:
     }
     if self._stacked_edge_outputs is not None:
       children[output_keys.EDGE] = self._save_edge_outputs()
+    turbulent_transport_tree = self._save_turbulent_transport()
+    if turbulent_transport_tree.children:
+      children[output_keys.TURBULENT_TRANSPORT] = turbulent_transport_tree
     data_tree = xr.DataTree(
         children=children,  # pyrefly: ignore[bad-argument-type]
         dataset=xr.Dataset(
@@ -647,3 +650,15 @@ class StateHistory:
     if self._stacked_edge_outputs is None:
       return xr.DataTree(dataset=xr.Dataset({}))
     return self._stacked_edge_outputs.to_xr_datatree(self._output_grid_context)
+
+  def _save_turbulent_transport(self) -> xr.DataTree:
+    """Saves turbulent transport per-model outputs to a DataTree."""
+    children = {}
+    turbulent = self._stacked_core_transport.turbulent
+    for model_name, model_output in turbulent.core_coefficients.items():
+      model_dict = model_output.to_output_dict(self._output_grid_context)
+      children[model_name] = xr.DataTree(dataset=xr.Dataset(model_dict))
+    for model_name, model_output in turbulent.pedestal_coefficients.items():
+      model_dict = model_output.to_output_dict(self._output_grid_context)
+      children[model_name] = xr.DataTree(dataset=xr.Dataset(model_dict))
+    return xr.DataTree(children=children)
