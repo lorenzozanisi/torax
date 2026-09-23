@@ -174,12 +174,12 @@ class AdaptiveTGLFTransportModel(
           for channel in self.flux_channels:
             if channel in res:
               tglf_fluxes[channel][face_idx] = res[channel]
-        elif isinstance(res, (tuple, list)):
+        else:
+          # Default tglf_transport_model._run_single_tglf returns a tuple:
+          # (face_idx, pfi, efe, efi) matching self.flux_channels.
           face_idx = res[0]
           for channel, val in zip(self.flux_channels, res[1:]):
             tglf_fluxes[channel][face_idx] = val
-        else:
-          raise TypeError(f"Unexpected solver result type: {type(res)}")
 
       # Fuse predictions across all channels
       final_fluxes = [
