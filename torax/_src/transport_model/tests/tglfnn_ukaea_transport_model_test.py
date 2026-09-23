@@ -15,6 +15,7 @@ from unittest import mock
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax.numpy as jnp
+import numpy as np
 from torax._src.test_utils import default_configs
 from torax._src.transport_model import pydantic_model
 from torax._src.transport_model import tglf_based_transport_model
@@ -150,6 +151,19 @@ class TglfnnUkaeaTransportModelTest(parameterized.TestCase):
     rel_unc = model.compute_relative_uncertainty(tglf_inputs)
     self.assertEqual(rel_unc.shape, geo.rho_face_norm.shape)
     self.assertTrue(jnp.all(rel_unc >= 0.0))
+
+    # Test passing precomputed means & variances
+    rel_unc_precomputed = model.compute_relative_uncertainty(
+        means=means, variances=variances
+    )
+    np.testing.assert_allclose(rel_unc, rel_unc_precomputed)
+
+    # Test passing custom subset of flux_names
+    rel_unc_single = model.compute_relative_uncertainty(
+        means=means, variances=variances, flux_names=['efi_gb']
+    )
+    self.assertEqual(rel_unc_single.shape, geo.rho_face_norm.shape)
+    self.assertTrue(jnp.all(rel_unc >= rel_unc_single))
 
 
 if __name__ == '__main__':

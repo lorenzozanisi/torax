@@ -13,69 +13,42 @@
 # limitations under the License.
 """Domain-agnostic Active Learning and Adaptive Physics Module architecture."""
 
-from collections.abc import Callable, Mapping
-import dataclasses
-from typing import Any, Literal
+from collections.abc import Mapping
+import enum
+from typing import Any
 
 import numpy as np
-from torax._src.data_harvesting import HarvestSample
-from torax._src.data_harvesting import StagingSink
-
-FallbackMode = Literal["full_profile", "per_face"]
+from torax._src import data_harvesting
 
 
-def apply_spatial_smoothing(
-    values: np.ndarray,
-    coords: np.ndarray,
-    sigma: float,
-) -> np.ndarray:
-  """Applies a normalized 1D Gaussian smoothing filter to spatial profile values.
+@enum.unique
+class FallbackMode(enum.Enum):
+  """Fallback mode for active learning high-fidelity query."""
 
-  Args:
-    values: 1D array of values across radial faces or cells.
-    coords: 1D coordinate array (e.g. rho_face_norm).
-    sigma: Gaussian smoothing width in coordinate units. If <= 0, returns values unchanged.
-
-  Returns:
-    Smoothed 1D array of identical shape.
-  """
-  if sigma <= 0.0 or len(values) <= 1:
-    return values
-
-  # Compute pairwise squared distances: (N, N)
-  diffs = coords[:, None] - coords[None, :]
-  weights = np.exp(-0.5 * (diffs / sigma) ** 2)
-  # Normalize rows
-  weights /= np.sum(weights, axis=1, keepdims=True)
-  return weights @ values
-
-
-@dataclasses.dataclass(frozen=True)
-class AdaptivePhysicsConfig:
-  """Configuration parameters for adaptive physics surrogate execution."""
-
-  uncertainty_threshold: float = 0.20
-  fallback_mode: FallbackMode = "full_profile"
-  smoothing_sigma: float = 0.05
-  enable_data_harvesting: bool = True
+  FULL_PROFILE = "full_profile"
+  PER_FACE = "per_face"
 
 
 class AdaptivePhysicsEngine:
-  """Coordinates surrogate inference, uncertainty gating, fallback execution, and harvesting."""
+  """Coordinates surrogate uncertainty gating, fallback execution, and harvesting."""
 
   def __init__(
       self,
-      config: AdaptivePhysicsConfig,
-      sink: StagingSink | None = None,
+      uncertainty_threshold: float = 0.20,
+      fallback_mode: FallbackMode | str = FallbackMode.FULL_PROFILE,
+      sink: data_harvesting.StagingSink | None = None,
   ):
-    self.config = config
+    self.uncertainty_threshold = uncertainty_threshold
+    if isinstance(fallback_mode, str):
+      fallback_mode = FallbackMode(fallback_mode)
+    self.fallback_mode = fallback_mode
     self.sink = sink
 
-  def decide_fallback(
+  def acquisition_function(
       self,
       relative_uncertainty: np.ndarray,
   ) -> tuple[bool, np.ndarray]:
-    """Determines whether fallback is triggered and produces the execution mask.
+    """Active learning acquisition function deciding high-fidelity queries.
 
     Args:
       relative_uncertainty: 1D array of uncertainty estimates (e.g. sigma / |mu|).
@@ -84,35 +57,46 @@ class AdaptivePhysicsEngine:
       needs_fallback: True if any face requires high-fidelity solver execution.
       run_mask: Boolean 1D array indicating which radial points require high-fidelity solver.
     """
-    exceeds = relative_uncertainty > self.config.uncertainty_threshold
+    exceeds = relative_uncertainty > self.uncertainty_threshold
     any_exceeds = bool(np.any(exceeds))
 
     if not any_exceeds:
       return False, np.zeros_like(relative_uncertainty, dtype=bool)
 
-    if self.config.fallback_mode == "full_profile":
+    if self.fallback_mode == FallbackMode.FULL_PROFILE:
       return True, np.ones_like(relative_uncertainty, dtype=bool)
-    elif self.config.fallback_mode == "per_face":
+    elif self.fallback_mode == FallbackMode.PER_FACE:
       return True, exceeds
     else:
-      raise ValueError(f"Unknown fallback mode: {self.config.fallback_mode}")
+      raise ValueError(f"Unknown fallback mode: {self.fallback_mode}")
+
+  decide_fallback = acquisition_function  # Alias for backward compatibility
+
+  def fuse(
+      self,
+      surrogate_vals: np.ndarray,
+      high_fidelity_vals: np.ndarray,
+      run_mask: np.ndarray,
+  ) -> np.ndarray:
+    """Combines surrogate and high-fidelity evaluations across radial faces."""
+    if self.fallback_mode == FallbackMode.FULL_PROFILE:
+      return high_fidelity_vals
+
+    # Splicing in per_face mode without redundant spatial smoothing
+    return np.where(run_mask, high_fidelity_vals, surrogate_vals)
 
   def fuse_and_smooth(
       self,
       surrogate_vals: np.ndarray,
       high_fidelity_vals: np.ndarray,
       run_mask: np.ndarray,
-      coords: np.ndarray,
+      coords: np.ndarray | None = None,
   ) -> np.ndarray:
-    """Combines surrogate and high-fidelity evaluations and smooths across boundaries."""
-    if self.config.fallback_mode == "full_profile":
-      return high_fidelity_vals
+    """Backward-compatible alias for fuse."""
+    del coords
+    return self.fuse(surrogate_vals, high_fidelity_vals, run_mask)
 
-    # Splicing in per_face mode
-    fused = np.where(run_mask, high_fidelity_vals, surrogate_vals)
-    return apply_spatial_smoothing(fused, coords, self.config.smoothing_sigma)
-
-  def harvest_if_enabled(
+  def harvest(
       self,
       fingerprint: str,
       inputs: Mapping[str, np.ndarray],
@@ -121,10 +105,10 @@ class AdaptivePhysicsEngine:
       metadata: Mapping[str, Any] | None = None,
   ) -> None:
     """Dispatches evaluated input-output pairs to the data harvesting sink."""
-    if not self.config.enable_data_harvesting or self.sink is None:
+    if self.sink is None:
       return
 
-    sample = HarvestSample(
+    sample = data_harvesting.HarvestSample(
         fingerprint=fingerprint,
         inputs=inputs,
         outputs=high_fidelity_outputs,
@@ -132,3 +116,5 @@ class AdaptivePhysicsEngine:
         metadata=metadata,
     )
     self.sink.record(sample)
+
+  harvest_if_enabled = harvest  # Alias for backward compatibility

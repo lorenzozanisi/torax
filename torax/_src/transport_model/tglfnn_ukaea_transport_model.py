@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import dataclasses
 from typing import Literal
 
@@ -168,23 +169,45 @@ class TGLFNNukaeaTransportModel(
 
   def compute_relative_uncertainty(
       self,
-      tglf_inputs: tglf_based_transport_model.TGLFInputs,
+      tglf_inputs: tglf_based_transport_model.TGLFInputs | None = None,
+      means: Mapping[str, jax.Array] | None = None,
+      variances: Mapping[str, jax.Array] | None = None,
+      flux_names: Sequence[str] | None = None,
       eps: float = 1e-4,
   ) -> jax.Array:
-    """Computes max relative uncertainty across all predicted flux channels.
+    """Computes max relative uncertainty across predicted flux channels.
+
+    Args:
+      tglf_inputs: Input features. Evaluated if means/variances are not provided.
+      means: Pre-computed predictive means. If provided alongside variances,
+        avoids re-evaluating the surrogate forward pass.
+      variances: Pre-computed predictive variances.
+      flux_names: Optional sequence of flux names to consider. If None,
+        considers all available predicted channels.
+      eps: Small constant to prevent division by zero.
 
     Returns:
       Array of shape (n_faces,) with the maximum relative standard deviation.
     """
-    means, variances = self.predict_with_uncertainty(tglf_inputs)
+    if means is None or variances is None:
+      if tglf_inputs is None:
+        raise ValueError(
+            "Either tglf_inputs or both (means, variances) must be provided."
+        )
+      means, variances = self.predict_with_uncertainty(tglf_inputs)
+
+    if flux_names is None:
+      flux_names = list(means.keys())
+
     rel_uncs = []
-    for k in ["efi_gb", "efe_gb", "pfi_gb"]:
-      if k in means:
-        sigma = jnp.sqrt(jnp.maximum(variances[k], 0.0))
+    for k in flux_names:
+      if k in means and k in variances:
+        sigma = jnp.sqrt(variances[k])
         rel_unc = sigma / (jnp.abs(means[k]) + eps)
         rel_uncs.append(rel_unc)
     if not rel_uncs:
-      return jnp.zeros_like(tglf_inputs.RLTS_1)
+      first_arr = next(iter(means.values()))
+      return jnp.zeros_like(first_arr)
     return jnp.max(jnp.stack(rel_uncs, axis=0), axis=0)
 
   def call_implementation(

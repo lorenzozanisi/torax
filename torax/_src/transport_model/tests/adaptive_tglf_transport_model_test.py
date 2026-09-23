@@ -14,16 +14,17 @@
 """Tests for AdaptiveTGLFTransportModel."""
 
 from concurrent import futures
-import glob
 import os
 import shutil
 import tempfile
 from typing import Any
+from unittest import mock
 
 from absl.testing import absltest
 import jax.numpy as jnp
 import numpy as np
-from torax._src.data_harvesting import StagingSink
+from torax._src import data_harvesting
+from torax._src.physics import adaptive_physics_module
 from torax._src.transport_model import adaptive_tglf_transport_model
 from torax._src.transport_model import pydantic_model
 from torax._src.transport_model import tglfnn_ukaea_transport_model
@@ -46,18 +47,22 @@ class AdaptiveTGLFTransportModelTest(absltest.TestCase):
     config = pydantic_model.AdaptiveTGLFModelConfig(
         machine="multimachine",
         uncertainty_threshold=0.15,
-        fallback_mode="per_face",
-        smoothing_sigma=0.08,
+        fallback_mode=adaptive_physics_module.FallbackMode.PER_FACE,
         enable_data_harvesting=True,
         harvest_output_dir=self.test_dir,
     )
     self.assertEqual(config.model_name, "adaptive_tglf")
     self.assertEqual(config.uncertainty_threshold, 0.15)
-    self.assertEqual(config.fallback_mode, "per_face")
+    self.assertEqual(
+        config.fallback_mode, adaptive_physics_module.FallbackMode.PER_FACE
+    )
 
     runtime_params = config.build_runtime_params(t=0.0)
     self.assertEqual(runtime_params.uncertainty_threshold, 0.15)
-    self.assertEqual(runtime_params.fallback_mode, "per_face")
+    self.assertEqual(
+        runtime_params.fallback_mode,
+        adaptive_physics_module.FallbackMode.PER_FACE,
+    )
 
   def test_adaptive_tglf_no_fallback_when_uncertainty_low(self):
     _, (runtime_params, geo, core_profiles, _, two_point_mask) = (
@@ -70,11 +75,15 @@ class AdaptiveTGLFTransportModelTest(absltest.TestCase):
     surrogate = tglfnn_ukaea_transport_model.TGLFNNukaeaTransportModel(
         machine="multimachine"
     )
-    sink = StagingSink(output_dir=self.test_dir, run_id="no_fallback_run")
+    sink = data_harvesting.StagingSink(
+        output_dir=self.test_dir, run_id="no_fallback_run"
+    )
 
     called_solver = []
 
-    def mock_solver(i: int, local_dict: dict[str, Any], global_dict: dict[str, Any]):
+    def mock_solver(
+        i: int, local_dict: dict[str, Any], global_dict: dict[str, Any]
+    ):
       called_solver.append(i)
       return i, 1.0, 2.0, 3.0
 
@@ -116,11 +125,15 @@ class AdaptiveTGLFTransportModelTest(absltest.TestCase):
     surrogate = tglfnn_ukaea_transport_model.TGLFNNukaeaTransportModel(
         machine="multimachine"
     )
-    sink = StagingSink(output_dir=self.test_dir, run_id="fallback_run")
+    sink = data_harvesting.StagingSink(
+        output_dir=self.test_dir, run_id="fallback_run"
+    )
 
     called_faces = []
 
-    def mock_solver(i: int, local_dict: dict[str, Any], global_dict: dict[str, Any]):
+    def mock_solver(
+        i: int, local_dict: dict[str, Any], global_dict: dict[str, Any]
+    ):
       called_faces.append(i)
       # Return synthetic high-fidelity values: (index, pfi, efe, efi)
       return i, 0.5, 4.0, 5.0
@@ -136,7 +149,7 @@ class AdaptiveTGLFTransportModelTest(absltest.TestCase):
     config = pydantic_model.AdaptiveTGLFModelConfig(
         machine="multimachine",
         uncertainty_threshold=0.0,
-        fallback_mode="full_profile",
+        fallback_mode=adaptive_physics_module.FallbackMode.FULL_PROFILE,
         enable_data_harvesting=True,
         harvest_output_dir=self.test_dir,
     )
@@ -171,11 +184,15 @@ class AdaptiveTGLFTransportModelTest(absltest.TestCase):
     surrogate = tglfnn_ukaea_transport_model.TGLFNNukaeaTransportModel(
         machine="multimachine"
     )
-    sink = StagingSink(output_dir=self.test_dir, run_id="per_face_run")
+    sink = data_harvesting.StagingSink(
+        output_dir=self.test_dir, run_id="per_face_run"
+    )
 
     called_faces = []
 
-    def mock_solver(i: int, local_dict: dict[str, Any], global_dict: dict[str, Any]):
+    def mock_solver(
+        i: int, local_dict: dict[str, Any], global_dict: dict[str, Any]
+    ):
       called_faces.append(i)
       return i, 0.5, 4.0, 5.0
 
@@ -191,7 +208,6 @@ class AdaptiveTGLFTransportModelTest(absltest.TestCase):
     synthetic_unc = np.zeros(n_faces)
     synthetic_unc[2] = 0.50
 
-    from unittest import mock
     with mock.patch.object(
         tglfnn_ukaea_transport_model.TGLFNNukaeaTransportModel,
         "compute_relative_uncertainty",
@@ -200,8 +216,7 @@ class AdaptiveTGLFTransportModelTest(absltest.TestCase):
       config = pydantic_model.AdaptiveTGLFModelConfig(
           machine="multimachine",
           uncertainty_threshold=0.20,
-          fallback_mode="per_face",
-          smoothing_sigma=0.05,
+          fallback_mode=adaptive_physics_module.FallbackMode.PER_FACE,
           enable_data_harvesting=False,
           harvest_output_dir=self.test_dir,
       )
@@ -218,6 +233,52 @@ class AdaptiveTGLFTransportModelTest(absltest.TestCase):
       self.assertEqual(coeffs.chi_face_ion.shape, geo.rho_face_norm.shape)
       # Only face 2 should have been evaluated!
       self.assertEqual(called_faces, [2])
+
+  def test_adaptive_tglf_custom_flux_channels(self):
+    _, (runtime_params, geo, core_profiles, _, two_point_mask) = (
+        tglf_based_transport_model_test._get_config_and_model_inputs({
+            "core_transport_models": {
+                "bohm-gyrobohm": {"model_name": "bohm-gyrobohm"},
+            },
+        })
+    )
+    surrogate = tglfnn_ukaea_transport_model.TGLFNNukaeaTransportModel(
+        machine="multimachine"
+    )
+    sink = data_harvesting.StagingSink(
+        output_dir=self.test_dir, run_id="custom_fluxes"
+    )
+
+    def mock_dict_solver(
+        i: int, local_dict: dict[str, Any], global_dict: dict[str, Any]
+    ):
+      return {"face_index": i, "efe_gb": 3.0, "efi_gb": 4.0}
+
+    model = adaptive_tglf_transport_model.AdaptiveTGLFTransportModel(
+        surrogate_model=surrogate,
+        executor=self.executor,
+        sink=sink,
+        high_fidelity_solver_fn=mock_dict_solver,
+        flux_channels=("efe_gb", "efi_gb"),
+    )
+
+    config = pydantic_model.AdaptiveTGLFModelConfig(
+        machine="multimachine",
+        uncertainty_threshold=0.0,
+        fallback_mode=adaptive_physics_module.FallbackMode.FULL_PROFILE,
+        enable_data_harvesting=True,
+        harvest_output_dir=self.test_dir,
+    )
+    transport_params = config.build_runtime_params(t=0.0)
+
+    coeffs = model(
+        transport_runtime_params=transport_params,
+        runtime_params=runtime_params,
+        geo=geo,
+        core_profiles=core_profiles,
+        two_point_mask=two_point_mask,
+    )
+    self.assertEqual(coeffs.chi_face_ion.shape, geo.rho_face_norm.shape)
 
 
 if __name__ == "__main__":

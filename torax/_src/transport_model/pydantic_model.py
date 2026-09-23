@@ -24,7 +24,8 @@ import chex
 from fusion_surrogates.qlknn.models import registry
 import numpy as np
 import pydantic
-from torax._src.data_harvesting import StagingSink
+from torax._src import data_harvesting
+from torax._src.physics import adaptive_physics_module
 from torax._src.torax_pydantic import interpolated_param_1d
 from torax._src.torax_pydantic import torax_pydantic
 from torax._src.transport_model import adaptive_tglf_transport_model
@@ -259,14 +260,14 @@ class AdaptiveTGLFModelConfig(pydantic_model_base.ComponentTransportBase):
   model_name: Annotated[Literal['adaptive_tglf'], torax_pydantic.JAX_STATIC] = (
       'adaptive_tglf'
   )
+  # TODO: Replace machine with model hash.
   machine: Annotated[
       Literal['step', 'multimachine'], torax_pydantic.JAX_STATIC
   ] = 'multimachine'
   uncertainty_threshold: pydantic.NonNegativeFloat = 0.20
   fallback_mode: Annotated[
-      Literal['full_profile', 'per_face'], torax_pydantic.JAX_STATIC
-  ] = 'full_profile'
-  smoothing_sigma: pydantic.NonNegativeFloat = 0.05
+      adaptive_physics_module.FallbackMode, torax_pydantic.JAX_STATIC
+  ] = adaptive_physics_module.FallbackMode.FULL_PROFILE
   enable_data_harvesting: bool = True
   harvest_output_dir: str = '/tmp/torax_harvest'
 
@@ -294,7 +295,7 @@ class AdaptiveTGLFModelConfig(pydantic_model_base.ComponentTransportBase):
         mp_context=mp_context,
     )
     sink = (
-        StagingSink(output_dir=self.harvest_output_dir)
+        data_harvesting.StagingSink(output_dir=self.harvest_output_dir)
         if self.enable_data_harvesting
         else None
     )
@@ -312,7 +313,6 @@ class AdaptiveTGLFModelConfig(pydantic_model_base.ComponentTransportBase):
     return adaptive_tglf_transport_model.RuntimeParams(
         uncertainty_threshold=self.uncertainty_threshold,
         fallback_mode=self.fallback_mode,
-        smoothing_sigma=self.smoothing_sigma,
         enable_data_harvesting=self.enable_data_harvesting,
         harvest_output_dir=self.harvest_output_dir,
         use_rotation=self.use_rotation,

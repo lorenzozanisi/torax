@@ -17,7 +17,7 @@ import shutil
 import tempfile
 from absl.testing import absltest
 import numpy as np
-from torax._src.data_harvesting import StagingSink
+from torax._src import data_harvesting
 from torax._src.physics import adaptive_physics_module
 
 
@@ -31,75 +31,70 @@ class AdaptivePhysicsModuleTest(absltest.TestCase):
     shutil.rmtree(self.test_dir)
     super().tearDown()
 
-  def test_spatial_smoothing(self):
-    x = np.linspace(0.0, 1.0, 20)
-    # Step function
-    y = np.where(x > 0.5, 10.0, 0.0)
-    y_smooth = adaptive_physics_module.apply_spatial_smoothing(y, x, sigma=0.1)
-
-    self.assertEqual(y.shape, y_smooth.shape)
-    # Smoothing must soften the step discontinuity
-    self.assertLess(y_smooth[10], 10.0)
-    self.assertGreater(y_smooth[9], 0.0)
-
-  def test_decide_fallback_full_profile(self):
-    cfg = adaptive_physics_module.AdaptivePhysicsConfig(
+  def test_acquisition_function_full_profile(self):
+    engine = adaptive_physics_module.AdaptivePhysicsEngine(
         uncertainty_threshold=0.25,
-        fallback_mode="full_profile",
+        fallback_mode=adaptive_physics_module.FallbackMode.FULL_PROFILE,
     )
-    engine = adaptive_physics_module.AdaptivePhysicsEngine(config=cfg)
 
     # Case 1: All uncertainties low
     rel_unc_low = np.array([0.1, 0.05, 0.20, 0.15])
-    needs_fallback, mask = engine.decide_fallback(rel_unc_low)
+    needs_fallback, mask = engine.acquisition_function(rel_unc_low)
     self.assertFalse(needs_fallback)
     self.assertFalse(np.any(mask))
 
     # Case 2: One point exceeds threshold
     rel_unc_high = np.array([0.1, 0.05, 0.30, 0.15])
-    needs_fallback, mask = engine.decide_fallback(rel_unc_high)
+    needs_fallback, mask = engine.acquisition_function(rel_unc_high)
     self.assertTrue(needs_fallback)
     # In full_profile mode, entire profile is flagged
     self.assertTrue(np.all(mask))
 
-  def test_decide_fallback_per_face(self):
-    cfg = adaptive_physics_module.AdaptivePhysicsConfig(
+  def test_acquisition_function_per_face(self):
+    engine = adaptive_physics_module.AdaptivePhysicsEngine(
         uncertainty_threshold=0.25,
-        fallback_mode="per_face",
+        fallback_mode=adaptive_physics_module.FallbackMode.PER_FACE,
     )
-    engine = adaptive_physics_module.AdaptivePhysicsEngine(config=cfg)
 
     rel_unc = np.array([0.1, 0.35, 0.15, 0.40])
-    needs_fallback, mask = engine.decide_fallback(rel_unc)
+    needs_fallback, mask = engine.acquisition_function(rel_unc)
     self.assertTrue(needs_fallback)
     np.testing.assert_array_equal(mask, [False, True, False, True])
 
-  def test_fuse_and_smooth(self):
-    cfg = adaptive_physics_module.AdaptivePhysicsConfig(
+  def test_fuse(self):
+    engine = adaptive_physics_module.AdaptivePhysicsEngine(
         uncertainty_threshold=0.25,
-        fallback_mode="per_face",
-        smoothing_sigma=0.05,
+        fallback_mode=adaptive_physics_module.FallbackMode.PER_FACE,
     )
-    engine = adaptive_physics_module.AdaptivePhysicsEngine(config=cfg)
 
-    x = np.linspace(0.0, 1.0, 5)
     surr = np.ones(5) * 1.0
     hi_fi = np.ones(5) * 5.0
     mask = np.array([False, False, True, False, False])
 
-    fused = engine.fuse_and_smooth(surr, hi_fi, mask, x)
+    fused = engine.fuse(surr, hi_fi, mask)
     self.assertEqual(fused.shape, surr.shape)
-    # High-fidelity point was at index 2, so fused[2] should be highest
-    self.assertGreater(fused[2], fused[0])
+    np.testing.assert_allclose(fused, [1.0, 1.0, 5.0, 1.0, 1.0])
 
-  def test_harvest_if_enabled(self):
-    sink = StagingSink(output_dir=self.test_dir, run_id="harvest_test")
-    cfg = adaptive_physics_module.AdaptivePhysicsConfig(
-        enable_data_harvesting=True
+  def test_fuse_full_profile(self):
+    engine = adaptive_physics_module.AdaptivePhysicsEngine(
+        uncertainty_threshold=0.25,
+        fallback_mode=adaptive_physics_module.FallbackMode.FULL_PROFILE,
     )
-    engine = adaptive_physics_module.AdaptivePhysicsEngine(config=cfg, sink=sink)
 
-    engine.harvest_if_enabled(
+    surr = np.ones(5) * 1.0
+    hi_fi = np.ones(5) * 5.0
+    mask = np.ones(5, dtype=bool)
+
+    fused = engine.fuse(surr, hi_fi, mask)
+    np.testing.assert_allclose(fused, hi_fi)
+
+  def test_harvest(self):
+    sink = data_harvesting.StagingSink(
+        output_dir=self.test_dir, run_id="harvest_test"
+    )
+    engine = adaptive_physics_module.AdaptivePhysicsEngine(sink=sink)
+
+    engine.harvest(
         fingerprint="tglf_fingerprint123",
         inputs={"RLTS_1": np.ones(5)},
         high_fidelity_outputs={"efi_gb": np.ones(5) * 2.0},
