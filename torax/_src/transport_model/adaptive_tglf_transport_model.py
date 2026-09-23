@@ -20,13 +20,13 @@ from typing import Any
 
 import jax
 import numpy as np
+from torax._src import acquisition_function
 from torax._src import array_typing
 from torax._src import data_harvesting
 from torax._src.geometry import geometry
 from torax._src import jax_utils
 from torax._src import state
 from torax._src.config import runtime_params as runtime_params_lib
-from torax._src.physics import adaptive_physics_module
 from torax._src.transport_model import runtime_params as transport_runtime_params_lib
 from torax._src.transport_model import tglf_based_transport_model
 from torax._src.transport_model import tglfnn_ukaea_transport_model
@@ -35,7 +35,7 @@ from torax._src.transport_model.tglf import defaults as tglf_defaults
 from torax._src.transport_model.tglf import tglf_transport_model
 from typing_extensions import override
 
-# Type alias for high-fidelity evaluation worker:
+# Type alias for high-fidelity evaluation worker
 HighFidelitySolverFn = Callable[..., Any]
 
 
@@ -47,8 +47,8 @@ class RuntimeParams(tglf_based_transport_model.RuntimeParams):
   tglf_settings: tuple[tuple[str, Any], ...] = ()
   output_directory: str = "/tmp/torax_tglf_runs"
   uncertainty_threshold: float = 0.20
-  fallback_mode: adaptive_physics_module.FallbackMode = (
-      adaptive_physics_module.FallbackMode.FULL_PROFILE
+  fallback_mode: acquisition_function.FallbackMode = (
+      acquisition_function.FallbackMode.FULL_PROFILE
   )
   enable_data_harvesting: bool = True
   harvest_output_dir: str = "/tmp/torax_harvest"
@@ -75,7 +75,7 @@ class AdaptiveTGLFTransportModel(
       default=tglf_transport_model._run_single_tglf,
       metadata={"hash_by_id": True},
   )
-  flux_channels: tuple[str, ...] = ("efe_gb", "efi_gb", "pfi_gb")
+  flux_channels: tuple[str, ...] = ("pfi_gb", "efe_gb", "efi_gb")
 
   @override
   def call_implementation(
@@ -121,7 +121,7 @@ class AdaptiveTGLFTransportModel(
         settings=global_settings_dict,
     )
 
-    # 4. Active learning engine direct configuration from runtime params
+    # 4. Online data acquisition configured from runtime params
     sink = self.sink or (
         data_harvesting.StagingSink(
             output_dir=transport_runtime_params.harvest_output_dir
@@ -129,7 +129,7 @@ class AdaptiveTGLFTransportModel(
         if transport_runtime_params.enable_data_harvesting
         else None
     )
-    engine = adaptive_physics_module.AdaptivePhysicsEngine(
+    acquisition = acquisition_function.OnlineDataAcquisition(
         uncertainty_threshold=float(
             transport_runtime_params.uncertainty_threshold
         ),
@@ -142,7 +142,7 @@ class AdaptiveTGLFTransportModel(
         rel_unc: np.ndarray,
         *surr_flux_args: np.ndarray,
     ) -> tuple[np.ndarray, ...]:
-      needs_fallback, run_mask = engine.acquisition_function(rel_unc)
+      needs_fallback, run_mask = acquisition.acquisition_function(rel_unc)
 
       if not needs_fallback:
         # Zero expensive TGLF runs executed
@@ -153,8 +153,8 @@ class AdaptiveTGLFTransportModel(
 
       # Generalize over arbitrary surrogate flux channels
       tglf_fluxes = {
-          ch: np.copy(arr)
-          for ch, arr in zip(self.flux_channels, surr_flux_args)
+          channel: np.copy(arr)
+          for channel, arr in zip(self.flux_channels, surr_flux_args)
       }
 
       submitted_futures = [
@@ -170,31 +170,26 @@ class AdaptiveTGLFTransportModel(
       for fut in futures.as_completed(submitted_futures):
         res = fut.result()
         if isinstance(res, dict):
-          i = res["face_index"]
-          for ch in self.flux_channels:
-            if ch in res:
-              tglf_fluxes[ch][i] = res[ch]
+          face_idx = res["face_index"]
+          for channel in self.flux_channels:
+            if channel in res:
+              tglf_fluxes[channel][face_idx] = res[channel]
+        elif isinstance(res, (tuple, list)):
+          face_idx = res[0]
+          for channel, val in zip(self.flux_channels, res[1:]):
+            tglf_fluxes[channel][face_idx] = val
         else:
-          # Standard TGLF tuple: (i, pfi, efe, efi)
-          i, pfi, efe, efi = res
-          solver_channel_map = {
-              "pfi_gb": pfi,
-              "efe_gb": efe,
-              "efi_gb": efi,
-          }
-          for ch in self.flux_channels:
-            if ch in solver_channel_map:
-              tglf_fluxes[ch][i] = solver_channel_map[ch]
+          raise TypeError(f"Unexpected solver result type: {type(res)}")
 
       # Fuse predictions across all channels
       final_fluxes = [
-          engine.fuse(surr_arr, tglf_fluxes[ch], run_mask)
-          for ch, surr_arr in zip(self.flux_channels, surr_flux_args)
+          acquisition.fuse(surr_arr, tglf_fluxes[channel], run_mask)
+          for channel, surr_arr in zip(self.flux_channels, surr_flux_args)
       ]
 
       # Data harvesting dispatch
       if transport_runtime_params.enable_data_harvesting:
-        engine.harvest(
+        acquisition.harvest(
             fingerprint=fingerprint,
             inputs=local_dict,
             high_fidelity_outputs=tglf_fluxes,

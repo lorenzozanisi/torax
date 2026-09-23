@@ -23,8 +23,8 @@ from unittest import mock
 from absl.testing import absltest
 import jax.numpy as jnp
 import numpy as np
+from torax._src import acquisition_function
 from torax._src import data_harvesting
-from torax._src.physics import adaptive_physics_module
 from torax._src.transport_model import adaptive_tglf_transport_model
 from torax._src.transport_model import pydantic_model
 from torax._src.transport_model import tglfnn_ukaea_transport_model
@@ -47,21 +47,21 @@ class AdaptiveTGLFTransportModelTest(absltest.TestCase):
     config = pydantic_model.AdaptiveTGLFModelConfig(
         machine="multimachine",
         uncertainty_threshold=0.15,
-        fallback_mode=adaptive_physics_module.FallbackMode.PER_FACE,
+        fallback_mode=acquisition_function.FallbackMode.PER_FACE,
         enable_data_harvesting=True,
         harvest_output_dir=self.test_dir,
     )
     self.assertEqual(config.model_name, "adaptive_tglf")
     self.assertEqual(config.uncertainty_threshold, 0.15)
     self.assertEqual(
-        config.fallback_mode, adaptive_physics_module.FallbackMode.PER_FACE
+        config.fallback_mode, acquisition_function.FallbackMode.PER_FACE
     )
 
     runtime_params = config.build_runtime_params(t=0.0)
     self.assertEqual(runtime_params.uncertainty_threshold, 0.15)
     self.assertEqual(
         runtime_params.fallback_mode,
-        adaptive_physics_module.FallbackMode.PER_FACE,
+        acquisition_function.FallbackMode.PER_FACE,
     )
 
   def test_adaptive_tglf_no_fallback_when_uncertainty_low(self):
@@ -149,7 +149,7 @@ class AdaptiveTGLFTransportModelTest(absltest.TestCase):
     config = pydantic_model.AdaptiveTGLFModelConfig(
         machine="multimachine",
         uncertainty_threshold=0.0,
-        fallback_mode=adaptive_physics_module.FallbackMode.FULL_PROFILE,
+        fallback_mode=acquisition_function.FallbackMode.FULL_PROFILE,
         enable_data_harvesting=True,
         harvest_output_dir=self.test_dir,
     )
@@ -216,7 +216,7 @@ class AdaptiveTGLFTransportModelTest(absltest.TestCase):
       config = pydantic_model.AdaptiveTGLFModelConfig(
           machine="multimachine",
           uncertainty_threshold=0.20,
-          fallback_mode=adaptive_physics_module.FallbackMode.PER_FACE,
+          fallback_mode=acquisition_function.FallbackMode.PER_FACE,
           enable_data_harvesting=False,
           harvest_output_dir=self.test_dir,
       )
@@ -265,7 +265,7 @@ class AdaptiveTGLFTransportModelTest(absltest.TestCase):
     config = pydantic_model.AdaptiveTGLFModelConfig(
         machine="multimachine",
         uncertainty_threshold=0.0,
-        fallback_mode=adaptive_physics_module.FallbackMode.FULL_PROFILE,
+        fallback_mode=acquisition_function.FallbackMode.FULL_PROFILE,
         enable_data_harvesting=True,
         harvest_output_dir=self.test_dir,
     )

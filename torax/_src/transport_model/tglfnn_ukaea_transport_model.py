@@ -199,15 +199,9 @@ class TGLFNNukaeaTransportModel(
     if flux_names is None:
       flux_names = list(means.keys())
 
-    rel_uncs = []
-    for k in flux_names:
-      if k in means and k in variances:
-        sigma = jnp.sqrt(variances[k])
-        rel_unc = sigma / (jnp.abs(means[k]) + eps)
-        rel_uncs.append(rel_unc)
-    if not rel_uncs:
-      first_arr = next(iter(means.values()))
-      return jnp.zeros_like(first_arr)
+    rel_uncs = [
+        jnp.sqrt(variances[k]) / (jnp.abs(means[k]) + eps) for k in flux_names
+    ]
     return jnp.max(jnp.stack(rel_uncs, axis=0), axis=0)
 
   def call_implementation(

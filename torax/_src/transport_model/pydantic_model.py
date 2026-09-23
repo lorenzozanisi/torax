@@ -25,7 +25,7 @@ from fusion_surrogates.qlknn.models import registry
 import numpy as np
 import pydantic
 from torax._src import data_harvesting
-from torax._src.physics import adaptive_physics_module
+from torax._src import acquisition_function
 from torax._src.torax_pydantic import interpolated_param_1d
 from torax._src.torax_pydantic import torax_pydantic
 from torax._src.transport_model import adaptive_tglf_transport_model
@@ -266,8 +266,8 @@ class AdaptiveTGLFModelConfig(pydantic_model_base.ComponentTransportBase):
   ] = 'multimachine'
   uncertainty_threshold: pydantic.NonNegativeFloat = 0.20
   fallback_mode: Annotated[
-      adaptive_physics_module.FallbackMode, torax_pydantic.JAX_STATIC
-  ] = adaptive_physics_module.FallbackMode.FULL_PROFILE
+      acquisition_function.FallbackMode, torax_pydantic.JAX_STATIC
+  ] = acquisition_function.FallbackMode.FULL_PROFILE
   enable_data_harvesting: bool = True
   harvest_output_dir: str = '/tmp/torax_harvest'
 

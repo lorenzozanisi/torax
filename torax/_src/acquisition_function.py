@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Domain-agnostic Active Learning and Adaptive Physics Module architecture."""
+"""Online data acquisition and active learning query functions."""
 
 from collections.abc import Mapping
 import enum
@@ -29,7 +29,7 @@ class FallbackMode(enum.Enum):
   PER_FACE = "per_face"
 
 
-class AdaptivePhysicsEngine:
+class OnlineDataAcquisition:
   """Coordinates surrogate uncertainty gating, fallback execution, and harvesting."""
 
   def __init__(
@@ -70,8 +70,6 @@ class AdaptivePhysicsEngine:
     else:
       raise ValueError(f"Unknown fallback mode: {self.fallback_mode}")
 
-  decide_fallback = acquisition_function  # Alias for backward compatibility
-
   def fuse(
       self,
       surrogate_vals: np.ndarray,
@@ -82,19 +80,7 @@ class AdaptivePhysicsEngine:
     if self.fallback_mode == FallbackMode.FULL_PROFILE:
       return high_fidelity_vals
 
-    # Splicing in per_face mode without redundant spatial smoothing
     return np.where(run_mask, high_fidelity_vals, surrogate_vals)
-
-  def fuse_and_smooth(
-      self,
-      surrogate_vals: np.ndarray,
-      high_fidelity_vals: np.ndarray,
-      run_mask: np.ndarray,
-      coords: np.ndarray | None = None,
-  ) -> np.ndarray:
-    """Backward-compatible alias for fuse."""
-    del coords
-    return self.fuse(surrogate_vals, high_fidelity_vals, run_mask)
 
   def harvest(
       self,
@@ -116,5 +102,3 @@ class AdaptivePhysicsEngine:
         metadata=metadata,
     )
     self.sink.record(sample)
-
-  harvest_if_enabled = harvest  # Alias for backward compatibility
